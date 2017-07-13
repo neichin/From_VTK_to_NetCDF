@@ -20,6 +20,21 @@
 
 using namespace std;
 
+int isGrounded (vtkDoubleArray* data, vtkTriangle* triangle)
+{
+  double dataP1 = data->GetValue(triangle->GetPointIds()->GetId(0));
+  double dataP2 = data->GetValue(triangle->GetPointIds()->GetId(1));
+  double dataP3 = data->GetValue(triangle->GetPointIds()->GetId(2));
+
+  if ((dataP1+dataP2+dataP3) == 3.0)
+  {
+	return 1;
+  }
+  else
+  {
+	return 0;
+  }
+}
 
 double interpoleValue (vtkDoubleArray* data, vtkTriangle* triangle, double* weights)
 {
@@ -56,35 +71,36 @@ int main(int argc, char* argv[])
   string filename;
   string filenameNC;
   string filenameOutput;
+  string filenameBathy;
   double xmin = 350000.0;
   double xmax = 640000.0;
   double ymin = 0.0;
   double ymax = 80000.0;
   //////////// ARGS PARSING
-  if (argc < 4)
+  if (argc < 5)
   {
-	cout << "Error: at least to arguments are required " << endl;
+	cout << "Error: at least 5 arguments are required " << endl;
 	return 0;
   }
   else 
   {
-	cout << "args" << endl;
 	filename = argv[1];
  	filenameNC = argv[2];
-	filenameOutput = argv[3];
+	filenameOutput = argv[4];
+	filenameBathy = argv[3];
   }
 
-  if (argc > 4 && argc != 8)
+  if (argc > 5 && argc != 9)
   {
 	cout << "Error: 4 arguments required for domain bounds " << endl;
         return 0;
   }
-  else if (argc > 4 )
+  else if (argc > 5 )
   {
-	xmin = atof(argv[4]);
-	xmax = atof(argv[5]);
-	ymin = atof(argv[6]);
-	ymax = atof(argv[7]);
+	xmin = atof(argv[5]);
+	xmax = atof(argv[6]);
+	ymin = atof(argv[7]);
+	ymax = atof(argv[8]);
   }
 
   cout << "Interpolating Elmer to NEMO grid" << endl;
@@ -100,8 +116,13 @@ int main(int argc, char* argv[])
   source->Update();
   vtkSmartPointer<vtkUnstructuredGrid> output = source->GetOutput();
   vtkSmartPointer<vtkPointData> pointsData = output->GetPointData();
+
   vtkSmartPointer<vtkDataArray> arrayDraft = pointsData->GetScalars("zb");
   vtkSmartPointer<vtkDoubleArray> arrayDoubleDraft = vtkDoubleArray::SafeDownCast(arrayDraft);
+
+
+  vtkSmartPointer<vtkDataArray> arrayGM = pointsData->GetScalars("groundedmask");
+  vtkSmartPointer<vtkDoubleArray> arrayDoubleGM = vtkDoubleArray::SafeDownCast(arrayGM);
   ////////////////////////
   //////////////////////////////////////////
   
@@ -111,8 +132,10 @@ int main(int argc, char* argv[])
   //OPEN AND READ NETCDF GRID
   NcError err(NcError::silent_nonfatal);
   NcFile dataFile(filenameNC.c_str(), NcFile::ReadOnly);
+
+  NcFile dataFileBathy(filenameBathy.c_str(), NcFile::ReadOnly);
   
-  NcVar *x, *y, *draft; 
+  NcVar *bathy, *x, *y, *draft; 
   //GET DIMENSIONS
   NcDim *xdim = dataFile.get_dim(0);
   NcDim *ydim = dataFile.get_dim(1);
@@ -130,6 +153,11 @@ int main(int argc, char* argv[])
   y = dataFile.get_var(yVarNAME);
   float yData[nx];
   y->get(yData,ny);
+
+  // READ BATHY DATA
+  bathy = dataFileBathy.get_var("Bathymetry_isf");
+  float BathyData[ny][nx];
+  bathy->get(&BathyData[0][0],ny,nx);
 
   /////////////////////////////////////////////
   //CREATE ARRAY FOR NEW DRAFT
@@ -151,13 +179,19 @@ int main(int argc, char* argv[])
 	  newDraft[j][i] = 0.0 ;
 	  continue;
 	}
-        if ( point[0]< xmin || point[0]> xmax )
+        if ( point[0]> xmax )
+        //if ( point[0]< xmin || point[0]> xmax )
         {
 	  newDraft[j][i] = 0.0;
           continue;
         }
 	triangle = findTriangle(output, point, pcoords, weights);
-	newDraft[j][i] = interpoleValue(arrayDoubleDraft, triangle, weights);
+	if (isGrounded(arrayDoubleGM, triangle))
+	{
+	  newDraft[j][i] = BathyData[j][i];
+	}else{
+	  newDraft[j][i] = -1.0 * interpoleValue(arrayDoubleDraft, triangle, weights);
+	}
     }
   }
   ////////////////////////////////////////////      
